@@ -94,26 +94,35 @@ class BUS_HANDLERS():
         self.fps = self.fps_calculcator()
 
     def on_pad_added(self, rtspsrc, pad):
-        """
-            Link rtph264depay when new pad is recived
-        """
         caps = pad.get_current_caps()
         structure = caps.get_structure(0)
+
         if structure.get_string("media") == "video":
-            frames = structure.get_string("a-framesize").split("-")
+            # Default resolution in case missing
+            frames_raw = structure.get_string("a-framesize")
+            frames = ["0", "0"]
+            if frames_raw:
+                try:
+                    frames = frames_raw.split("-")
+                except Exception as e:
+                    logging.warning(f"Error splitting a-framesize: {e}")
+
             self.rtsp_video_caps = RTSP_CAPS(
-                structure.get_int("payload").value,
-                structure.get_int("clock-rate").value,
-                structure.get_string("packetization-mode"),
-                structure.get_string("encoding-name"),
-                structure.get_string("profile-level-id"),
-                structure.get_string("a-framesize"),
-                float(structure.get_string("a-framerate")),
+                structure.get_int("payload").value if structure.has_field("payload") else 96,
+                structure.get_int("clock-rate").value if structure.has_field("clock-rate") else 90000,
+                structure.get_string("packetization-mode") or "1",
+                structure.get_string("encoding-name") or "H264",
+                structure.get_string("profile-level-id") or "baseline",
+                frames_raw or "unknown",
+                float(structure.get_string("a-framerate") or "0.0"),
                 int(frames[0]),
                 int(frames[1])
             )
+
             logging.info(f"RTSP CAPS (VIDEO) | {self.rtsp_video_caps}")
+
         self.rtspsrc.link(self.rtph264depay)
+
 
     def on_new_manger(self, rtspsrc, manager):
         """
@@ -129,9 +138,6 @@ class BUS_HANDLERS():
             "handle-sync", self.jitterbuffer_sync, jitterbuffer)
 
     def jitterbuffer_sync(self, buffer, rtp_struct, jitterbuffer):
-        """
-            Get Jitterbuffer stats and rtpbin stats
-        """
         self.rtpbin_stats = X_RTP_BIN_STATS(
             rtp_struct.get_uint64("base-time").value,
             rtp_struct.get_uint64("sr-ext-rtptime").value,
@@ -152,4 +158,13 @@ class BUS_HANDLERS():
             struct.get_uint64("rtx-rtt").value,
             self.rtpbin_stats
         )
-        logging.info(f"JB-Lost: {self.jitterbuffer_stats.num_lost} | JB-Avg: {self.jitterbuffer_stats.avg_jitter}ms | Bitrate: {self.tags.bitrate} | Fps: {self.fps} | Resolution: {self.rtsp_video_caps.frame_height}x{self.rtsp_video_caps.frame_width}")
+
+        # Safely access bitrate, fps, resolution
+        bitrate = getattr(self.tags, "bitrate", "N/A")
+        fps = self.fps or "N/A"
+        if hasattr(self, "rtsp_video_caps"):
+            res = f"{self.rtsp_video_caps.frame_height}x{self.rtsp_video_caps.frame_width}"
+        else:
+            res = "N/A"
+
+        logging.info(f"JB-Lost: {self.jitterbuffer_stats.num_lost} | JB-Avg: {self.jitterbuffer_stats.avg_jitter}ms | Bitrate: {bitrate} | Fps: {fps} | Resolution: {res}")
